@@ -3,12 +3,29 @@ db_backup.py  -  SmartBilling Single DB Backup & Restore
 """
 
 import os
+import sys
 import shutil
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 
-# ── All files found relative to THIS script's folder ──
-_BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
+
+def get_app_dir():
+    """
+    Return the persistent app directory (same folder as the .exe when frozen,
+    otherwise the folder containing this source file).
+
+    This is critical: when packaged with PyInstaller (--onefile), __file__
+    points to a temporary _MEIxxxx folder that gets deleted on exit, so any
+    DB / credentials written there are lost. Using sys.executable's dir keeps
+    everything next to the .exe so data persists across runs and across systems.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# ── All files live next to the .exe (or this script when running from source) ──
+_BASE_DIR          = get_app_dir()
 CLIENT_SECRET_FILE = os.path.join(_BASE_DIR, "client_secrets.json")
 CREDS_FILE         = os.path.join(_BASE_DIR, "drive_creds.json")
 DB_FILE            = os.path.join(_BASE_DIR, "smartbilling.db")
