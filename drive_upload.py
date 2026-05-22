@@ -2,9 +2,18 @@ from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 from datetime import datetime
 import os
+import sys
 
-# ── All files found relative to THIS script's folder ──
-_BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
+
+def get_app_dir():
+    """Same logic as db_backup.get_app_dir() — see that file for rationale."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+# ── All files live next to the .exe (or this script when running from source) ──
+_BASE_DIR          = get_app_dir()
 CLIENT_SECRET_FILE = os.path.join(_BASE_DIR, "client_secrets.json")
 CREDS_FILE         = os.path.join(_BASE_DIR, "drive_creds.json")
 ROOT_FOLDER_ID     = "1Yi5FgPk8Z-tVC3UmfuEKCJF8yvXIJS-0"

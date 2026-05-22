@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import sqlite3
 import webbrowser
@@ -28,8 +29,23 @@ import num2words
 import calendar
 
 # ----------------- Config -----------------
-DB_FILE = "smartbilling.db"
-INVOICE_DIR = "invoices"
+def get_app_dir():
+    """
+    Return the persistent app directory.
+
+    When the program is packaged with PyInstaller, __file__ resolves to a
+    temporary _MEIxxxx folder that is deleted on exit, so any DB / invoices
+    written there are lost. Using sys.executable's directory keeps everything
+    next to the .exe so the data persists across runs and across systems.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+APP_DIR     = get_app_dir()
+DB_FILE     = os.path.join(APP_DIR, "smartbilling.db")
+INVOICE_DIR = os.path.join(APP_DIR, "invoices")
 
 os.makedirs(INVOICE_DIR, exist_ok=True)
 
@@ -340,7 +356,7 @@ def generate_monthly_report_pdf(year, month):
     analysis = get_monthly_analysis(year, month)
     
 # Create separate Monthly Reports folder
-    MONTHLY_REPORTS_DIR = "monthly_reports"
+    MONTHLY_REPORTS_DIR = os.path.join(APP_DIR, "monthly_reports")
     os.makedirs(MONTHLY_REPORTS_DIR, exist_ok=True)
     
     report_folder = os.path.join(MONTHLY_REPORTS_DIR, str(year), f"{month:02d}-{calendar.month_name[month]}")
@@ -616,7 +632,7 @@ def generate_tax_invoice_pdf(bill_id):
     c.setFont("Helvetica-Bold", 9)
     c.drawString(box_x + 3*mm, box_y - 19*mm, "Place of Supply:")
     c.setFont("Helvetica", 9)
-    c.drawString(box_x + 35*mm, box_y - 19*mm, place_of_supply or "Maharashtra")
+    c.drawString(box_x + 35*mm, box_y - 19*mm, place_of_supply or "Tamil Nadu")
     
     # Divider
     y = H - 58*mm
@@ -655,59 +671,79 @@ def generate_tax_invoice_pdf(bill_id):
     table_top = H - 90*mm
     c.setLineWidth(0.5)
     c.line(10*mm, table_top, W - 10*mm, table_top)
-    
+
+    # ── Column geometry (mm). Numeric columns use right-aligned edges so that
+    #    the header text and the values align perfectly. ──
+    COL_NUM_R     = 16    # "#"            (right-align, fits 1-3 digits)
+    COL_ITEM_L    = 18    # Item name      (left-align)
+    COL_ITEM_MAX  = 35    # max chars for Item (avoids overlap with HSN col)
+    COL_HSN_L     = 78    # HSN/SAC        (left-align)
+    COL_RATE_R    = 112   # Rate           (right-align)
+    COL_QTY_R     = 126   # Qty            (right-align)
+    COL_TAXABLE_R = 148   # Taxable        (right-align)
+    COL_TAXPCT_R  = 162   # Tax%           (right-align)
+    COL_TAXAMT_R  = 180   # Tax amount     (right-align)
+    COL_TOTAL_R   = 198   # Total          (right-align, == W - 12mm)
+
     # Table header
     c.setFillColor(colors.HexColor("#e3f2fd"))
     c.rect(10*mm, table_top - 8*mm, W - 20*mm, 8*mm, fill=1, stroke=0)
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 8)
-    
-    headers = [
-        (12, "#"), (20, "Item"), (90, "HSN"), (110, "Rate"), 
-        (130, "Qty"), (145, "Taxable"), (165, "Tax%"), (178, "Tax"), (192, "Total")
-    ]
-    for x, text in headers:
-        c.drawString(x*mm, table_top - 6*mm, text)
-    
+
+    hdr_y = table_top - 6*mm
+    c.drawRightString(COL_NUM_R*mm,     hdr_y, "#")
+    c.drawString     (COL_ITEM_L*mm,    hdr_y, "Item")
+    c.drawString     (COL_HSN_L*mm,     hdr_y, "HSN")
+    c.drawRightString(COL_RATE_R*mm,    hdr_y, "Rate")
+    c.drawRightString(COL_QTY_R*mm,     hdr_y, "Qty")
+    c.drawRightString(COL_TAXABLE_R*mm, hdr_y, "Taxable")
+    c.drawRightString(COL_TAXPCT_R*mm,  hdr_y, "Tax%")
+    c.drawRightString(COL_TAXAMT_R*mm,  hdr_y, "Tax")
+    c.drawRightString(COL_TOTAL_R*mm,   hdr_y, "Total")
+
     c.line(10*mm, table_top - 8*mm, W - 10*mm, table_top - 8*mm)
-    
+
     # Table rows
     y = table_top - 8*mm
     c.setFont("Helvetica", 8)
-    
+
     for idx, it in enumerate(items, 1):
         if y < 55*mm:
             y = new_page()
             draw_page_header()
             y = H - 35*mm
-        
+
         y -= 7*mm
-        
+
         # Alternating row colors
         if idx % 2 == 0:
             c.setFillColor(colors.HexColor("#fafafa"))
             c.rect(10*mm, y - 1*mm, W - 20*mm, 7*mm, fill=1, stroke=0)
             c.setFillColor(colors.black)
-        
-        price = float(it.get("price", 0))
-        qty = int(it.get("qty", 1))
-        tax_rate = float(it.get("tax_rate", 18))
-        taxable = price * qty
-        tax_amt = taxable * tax_rate / 100
+
+        price      = float(it.get("price", 0))
+        qty        = int(it.get("qty", 1))
+        tax_rate   = float(it.get("tax_rate", 18))
+        taxable    = price * qty
+        tax_amt    = taxable * tax_rate / 100
         item_total = taxable + tax_amt
-        
-        c.drawString(12*mm, y, str(idx))
-        c.drawString(20*mm, y, str(it.get("name", ""))[:30])
-        c.drawString(90*mm, y, str(it.get("hsn", "")))
-        c.drawRightString(125*mm, y, f"{price:,.2f}")
-        c.drawString(131*mm, y, str(qty))
-        c.drawRightString(160*mm, y, f"{taxable:,.2f}")
-        c.drawString(166*mm, y, f"{tax_rate:.0f}%")
-        c.drawRightString(185*mm, y, f"{tax_amt:,.2f}")
+
+        item_name = str(it.get("name", ""))[:COL_ITEM_MAX]
+        hsn_text  = str(it.get("hsn", ""))[:10]
+
+        c.drawRightString(COL_NUM_R*mm,     y, str(idx))
+        c.drawString     (COL_ITEM_L*mm,    y, item_name)
+        c.drawString     (COL_HSN_L*mm,     y, hsn_text)
+        c.drawRightString(COL_RATE_R*mm,    y, f"{price:,.2f}")
+        c.drawRightString(COL_QTY_R*mm,     y, str(qty))
+        c.drawRightString(COL_TAXABLE_R*mm, y, f"{taxable:,.2f}")
+        c.drawRightString(COL_TAXPCT_R*mm,  y, f"{tax_rate:.0f}%")
+        c.drawRightString(COL_TAXAMT_R*mm,  y, f"{tax_amt:,.2f}")
         c.setFont("Helvetica-Bold", 8)
-        c.drawRightString(W - 12*mm, y, f"{item_total:,.2f}")
+        c.drawRightString(COL_TOTAL_R*mm,   y, f"{item_total:,.2f}")
         c.setFont("Helvetica", 8)
-        
+
         c.setLineWidth(0.2)
         c.line(10*mm, y - 1*mm, W - 10*mm, y - 1*mm)
     
@@ -769,12 +805,20 @@ def generate_tax_invoice_pdf(bill_id):
     c.rect(15*mm, y - 6*mm, W - 30*mm, 6*mm, fill=1, stroke=0)
     c.setFillColor(colors.black)
     c.setFont("Helvetica-Bold", 7)
-    c.drawString(17*mm, y - 4*mm, "HSN/SAC")
-    c.drawString(50*mm, y - 4*mm, "Taxable Value")
-    c.drawString(85*mm, y - 4*mm, "Tax Rate")
-    c.drawString(110*mm, y - 4*mm, "Tax Amount")
-    c.drawString(145*mm, y - 4*mm, "Total")
-    
+
+    # HSN summary column right-edges (matches the values below)
+    HSN_CODE_L      = 17    # left-align
+    HSN_TAXABLE_R   = 75    # right-align
+    HSN_RATE_R      = 100   # right-align
+    HSN_TAXAMT_R    = 130   # right-align
+    HSN_TOTAL_R     = 165   # right-align
+
+    c.drawString     (HSN_CODE_L*mm,    y - 4*mm, "HSN/SAC")
+    c.drawRightString(HSN_TAXABLE_R*mm, y - 4*mm, "Taxable Value")
+    c.drawRightString(HSN_RATE_R*mm,    y - 4*mm, "Tax Rate")
+    c.drawRightString(HSN_TAXAMT_R*mm,  y - 4*mm, "Tax Amount")
+    c.drawRightString(HSN_TOTAL_R*mm,   y - 4*mm, "Total")
+
     # Group by HSN
     hsn_groups = {}
     for it in items:
@@ -785,15 +829,15 @@ def generate_tax_invoice_pdf(bill_id):
             hsn_groups[h] = {"taxable": 0, "tax_rate": tr, "tax_amt": 0}
         hsn_groups[h]["taxable"] += t
         hsn_groups[h]["tax_amt"] += t * tr / 100
-    
+
     y -= 8*mm
     c.setFont("Helvetica", 7)
     for h, hdata in hsn_groups.items():
-        c.drawString(17*mm, y, h)
-        c.drawRightString(75*mm, y, f"{cur}{hdata['taxable']:,.2f}")
-        c.drawString(90*mm, y, f"{hdata['tax_rate']:.0f}%")
-        c.drawRightString(130*mm, y, f"{cur}{hdata['tax_amt']:,.2f}")
-        c.drawRightString(165*mm, y, f"{cur}{hdata['taxable'] + hdata['tax_amt']:,.2f}")
+        c.drawString     (HSN_CODE_L*mm,    y, str(h))
+        c.drawRightString(HSN_TAXABLE_R*mm, y, f"{cur}{hdata['taxable']:,.2f}")
+        c.drawRightString(HSN_RATE_R*mm,    y, f"{hdata['tax_rate']:.0f}%")
+        c.drawRightString(HSN_TAXAMT_R*mm,  y, f"{cur}{hdata['tax_amt']:,.2f}")
+        c.drawRightString(HSN_TOTAL_R*mm,   y, f"{cur}{hdata['taxable'] + hdata['tax_amt']:,.2f}")
         y -= 5*mm
     
     y -= 3*mm
@@ -1002,7 +1046,7 @@ ttk.Separator(right).pack(fill='x', pady=3)
 cust_name_var = StringVar()
 cust_gstin_var = StringVar()
 cust_addr_var = StringVar()
-cust_pos_var = StringVar()
+cust_pos_var = StringVar(value="Tamil Nadu")
 
 # Label showing current customer name (updates after popup)
 cust_display_lbl = ttk.Label(right, text="No customer entered", font=('Segoe UI', 10), foreground='#adb5bd')
@@ -1061,7 +1105,7 @@ def open_bill_details():
     ttk.Label(frm, text="Place of Supply:", font=('Segoe UI', 11)).grid(row=3, column=0, sticky='e', padx=(0,10), pady=6)
     pos_e = ttk.Entry(frm, font=('Segoe UI', 11))
     pos_e.grid(row=3, column=1, sticky='ew', pady=6)
-    pos_e.insert(0, cust_pos_var.get())
+    pos_e.insert(0, cust_pos_var.get() or "Tamil Nadu")
 
     ttk.Separator(d, orient='horizontal').pack(fill='x', padx=10, pady=4)
     btn_row = ttk.Frame(d); btn_row.pack(pady=(0,12), padx=14, anchor='e')
@@ -1199,7 +1243,7 @@ def save_and_export():
         "gstin": cust_gstin_var.get(),
         "address": cust_addr_var.get(),
         "shipping": cust_addr_var.get(),
-        "place_of_supply": cust_pos_var.get() or "Maharashtra",
+        "place_of_supply": cust_pos_var.get() or "Tamil Nadu",
     }
     
     inv_no = inv_no_var.get()
@@ -1247,7 +1291,7 @@ def save_and_export():
     cust_name_var.set('')
     cust_gstin_var.set('')
     cust_addr_var.set('')
-    cust_pos_var.set('')
+    cust_pos_var.set('Tamil Nadu')
     cust_display_lbl.config(text="No customer entered", foreground='#adb5bd')
     discount_var.set(0.0)
     inv_no_var.set(generate_invoice_no())
@@ -1294,10 +1338,31 @@ def open_add_product():
     ttk.Label(frm, text="* Required fields", font=('Segoe UI', 9), foreground='gray').grid(
         row=len(fields), column=0, columnspan=2, sticky='w', pady=(4,0))
 
+    # Status / counter line — gives feedback without a blocking popup so the
+    # user can keep typing the next product immediately.
+    status_lbl = ttk.Label(frm, text="", font=('Segoe UI', 10, 'bold'), foreground='#28a745')
+    status_lbl.grid(row=len(fields) + 1, column=0, columnspan=2, sticky='w', pady=(6, 0))
+
+    added_count = [0]
+
+    def clear_form_for_next():
+        """Reset the form so another product can be entered without reopening the window."""
+        entries['code'].delete(0, 'end')
+        entries['code'].insert(0, generate_next_code())
+        entries['name'].delete(0, 'end')
+        entries['hsn'].delete(0, 'end')
+        entries['price'].delete(0, 'end')
+        entries['tax_rate'].delete(0, 'end')
+        entries['tax_rate'].insert(0, "18")
+        entries['stock'].delete(0, 'end')
+        entries['stock'].insert(0, "0")
+        # Focus Product Name so the user can start typing the next product immediately
+        entries['name'].focus_set()
+
     ttk.Separator(p, orient='horizontal').pack(fill='x', padx=10, pady=6)
     btn_row = ttk.Frame(p); btn_row.pack(pady=(0,10), padx=16, anchor='e')
 
-    def do_add():
+    def do_add(close_after=False):
         code     = entries['code'].get().strip()
         name     = entries['name'].get().strip()
         hsn      = entries['hsn'].get().strip()
@@ -1313,16 +1378,40 @@ def open_add_product():
             messagebox.showwarning("Invalid", "Price must be a number.", parent=p)
             return
         ok, msg = add_product_db(code, name, hsn, price, tax_rate or 18, stock or 0)
-        if ok:
-            messagebox.showinfo("Success", msg, parent=p)
+        if not ok:
+            messagebox.showerror("Error", msg, parent=p)
+            return
+
+        added_count[0] += 1
+        status_lbl.config(
+            text=f"✓ Added: {name}   |   Total added in this session: {added_count[0]}",
+            foreground='#28a745'
+        )
+
+        if close_after:
             p.destroy()
         else:
-            messagebox.showerror("Error", msg, parent=p)
+            # Stay open and prepare the form for the next product
+            clear_form_for_next()
 
-    tb.Button(btn_row, text="Cancel", bootstyle="secondary-outline", command=p.destroy).pack(side='left', padx=(0,8))
-    tb.Button(btn_row, text="Add Product", bootstyle="success", command=do_add).pack(side='left')
+    # Three buttons:
+    #   • Close       → close the window without doing anything else
+    #   • Add Product → save the current product and KEEP the window open
+    #                   (form clears, ready for the next product)
+    #   • OK          → save the current product and close the window
+    tb.Button(btn_row, text="Close", bootstyle="secondary-outline",
+              command=p.destroy).pack(side='left', padx=(0,8))
+    tb.Button(btn_row, text="Add Product", bootstyle="success",
+              command=lambda: do_add(close_after=False)).pack(side='left', padx=(0,8))
+    tb.Button(btn_row, text="OK", bootstyle="primary",
+              command=lambda: do_add(close_after=True)).pack(side='left')
+
+    # Pressing Enter in any entry triggers "Add Product" (stay open)
+    for e in entries.values():
+        e.bind('<Return>', lambda ev: do_add(close_after=False))
+
     p.update_idletasks()
-    p.minsize(420, p.winfo_reqheight() + 20)
+    p.minsize(460, p.winfo_reqheight() + 20)
 
 
 def open_list_products():
